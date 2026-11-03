@@ -35,3 +35,8 @@ def tracks():
             "artist": t[("artist", "id")],
         }
     )
+
+
+def find_track(track_id):
+    s = f"{track_id:06d}"
+    return DATASET / "fma_small" / s[:3] / f"{s}.mp3"
