@@ -14,6 +14,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+---
+
 ### Run tests
 
 Requirements:
@@ -28,6 +30,8 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest
 ```
+
+---
 
 ### Download dataset
 
