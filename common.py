@@ -22,6 +22,8 @@ HOP = 512
 N_MELS = 64
 N_FRAMES = 96
 
+SEGMENT_SAMPLES = N_FFT + (N_FRAMES - 1) * HOP
+
 
 def tracks():
     t = pandas.read_csv(
