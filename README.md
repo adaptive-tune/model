@@ -55,6 +55,22 @@ Remove zip files yourself when you've made sure that everything is ok
 
 ---
 
+### Prepare dataset
+
+**Requirements**:
+
+- Downloaded dataset
+- 2 GB of free space
+- .venv setup
+
+```
+python export.py
+```
+
+Which will prepare dataset into `./out/mel.npz`:
+
+---
+
 ### Download models
 
 **Requirements**:
@@ -77,4 +93,4 @@ Which will download Essentia models into `./models/`:
 - `deeptemp-k16-3.pb`: TempoCNN for BPM
 - `mood_*-discogs-effnet-1.pb` and `.json`: mood classifiers (aggressive, happy, party, relaxed, sad)
 
-Models are licensed under CC BY-NC-SA 4.0, see https://essentia.upf.edu/models.html
+Models are licensed under CC BY-NC-SA 4.0, see <https://essentia.upf.edu/models.html>
