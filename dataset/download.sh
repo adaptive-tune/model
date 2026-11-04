@@ -1,4 +1,4 @@
-#/bin/sh
+#!/bin/sh
 set -eo pipefail
 
 base_url="https://os.unil.cloud.switch.ch/fma"
