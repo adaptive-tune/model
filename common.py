@@ -14,7 +14,8 @@ GENRES = [
     "Pop",
     "Rock",
 ]
-
+MOODS = ["happy", "sad", "relaxed", "aggressive", "party"]
+POSITIVE = {"happy": 0, "sad": 1, "relaxed": 1, "aggressive": 0, "party": 1}
 
 SAMPLE_RATE = 16000
 N_FFT = 1024

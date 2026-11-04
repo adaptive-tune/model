@@ -1,2 +1,5 @@
 numpy==2.5.4
 pandas==2.3.3
+essentia-tensorflow==2.1b6.dev1389
+scikit-learn==1.9.1
+scipy==1.18.1

@@ -94,3 +94,26 @@ Which will download Essentia models into `./models/`:
 - `mood_*-discogs-effnet-1.pb` and `.json`: mood classifiers (aggressive, happy, party, relaxed, sad)
 
 Models are licensed under CC BY-NC-SA 4.0, see <https://essentia.upf.edu/models.html>
+
+---
+
+### Run teacher
+
+**Requirements**:
+
+- Downloaded dataset
+- Downloaded models
+- 500 MB of free space
+- .venv setup
+
+```
+python teacher.py
+```
+
+Which will run Essentia models on every track and save results into `./out/teacher.npz`:
+
+- `genre_prob`: genre probabilities from a classifier trained on Discogs-EffNet embeddings
+- `mood`: mood probabilities (happy, sad, relaxed, aggressive, party)
+- `bpm`: tempo from TempoCNN
+
+Takes a few hours, safe to stop and run again, finished tracks are cached in `./out/teacher/`
