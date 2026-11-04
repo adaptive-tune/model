@@ -31,8 +31,8 @@ def generate_npz():
     track_id = np.concatenate(track_ids)
     np.savez(
         ROOT / "out" / "mel.npz",
-        track_id=track_id,
-        piece=np.concatenate(pieces),
+        tid=track_id,
+        k=np.concatenate(pieces),
         split=t.loc[track_id, "split"].to_numpy().astype(str),
         genre=t.loc[track_id, "genre"].to_numpy(),
         mel=np.concatenate(mels),
