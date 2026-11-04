@@ -52,3 +52,29 @@ cd dataset
 
 Which will download 2 zip archives, and unzip them into `./dataset/fma_metadata/` and `./dataset/fma_small/`
 Remove zip files yourself when you've made sure that everything is ok
+
+---
+
+### Download models
+
+**Requirements**:
+
+- Linux
+- wget
+- sha1sum
+- 25 MB of free space
+
+To download models:
+
+```
+cd models
+./download.sh
+```
+
+Which will download Essentia models into `./models/`:
+
+- `discogs-effnet-bs64-1.pb`: Discogs-EffNet embeddings
+- `deeptemp-k16-3.pb`: TempoCNN for BPM
+- `mood_*-discogs-effnet-1.pb` and `.json`: mood classifiers (aggressive, happy, party, relaxed, sad)
+
+Models are licensed under CC BY-NC-SA 4.0, see https://essentia.upf.edu/models.html

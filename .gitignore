@@ -7,3 +7,5 @@ dataset/fma_small.zip
 dataset/fma_small
 dataset/fma_metadata
 out/
+models/*.pb
+models/*.json
