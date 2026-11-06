@@ -117,3 +117,43 @@ Which will run Essentia models on every track and save results into `./out/teach
 - `bpm`: tempo from TempoCNN
 
 Takes a few hours, safe to stop and run again, finished tracks are cached in `./out/teacher/`
+
+---
+
+### Train student
+
+**Requirements**:
+
+- `./out/mel.npz` and `./out/teacher.npz`
+- 4 GB of free RAM
+- .venv setup
+
+```
+python student.py small
+python student.py large
+```
+
+Which will train a small CNN on mel spectrograms to copy the teacher, and save it into `./out/student_small.keras` or `./out/student_large.keras`
+
+- `small`: for ESP32 without PSRAM
+- `large`: for ESP32 with PSRAM
+
+Takes 1-2 hours per model, prints test accuracy at the end
+
+---
+
+### Quantize student
+
+**Requirements**:
+
+- `./out/student_small.keras` or `./out/student_large.keras`
+- .venv setup
+
+```
+python quantize.py small
+python quantize.py large
+```
+
+Which will convert the model to int8 and save it into `./out/student_small.tflite` or `./out/student_large.tflite`
+
+Prints int8 test accuracy, difference against TensorFlow Lite Micro, and memory needed on the ESP32 (tensor arena)
