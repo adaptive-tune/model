@@ -14,11 +14,12 @@ EPSILON = 1e-7
 
 BATCH_SIZE = 128
 PREDICT_BATCH_SIZE = 512
-EPOCHS = 40
 EARLY_STOP_PATIENCE = 7
 LEARNING_RATE = 2e-3
 FINAL_LEARNING_RATE_FRACTION = 0.01
 DROPOUT = 0.2
+MAX_LOUDNESS_SHIFT = 1.0
+SEED = 0
 
 KERNEL_SIZE = 3
 BPM_HIDDEN_UNITS = 32
@@ -29,6 +30,7 @@ SIZES = {
     "small": {
         "stem": (24, 2),
         "blocks": [(40, 2), (64, 1), (96, 2), (128, 1), (192, 2), (256, 1)],
+        "epochs": 40,
     },
     "large": {
         "stem": (32, 1),
@@ -42,6 +44,7 @@ SIZES = {
             (384, 2),
             (512, 1),
         ],
+        "epochs": 18,
     },
 }
 
@@ -92,6 +95,36 @@ def targets(d, rows):
     }
 
 
+class Batches(keras.utils.PyDataset):
+    def __init__(self, x, d, rows, augment):
+        super().__init__()
+        self.x = x
+        self.d = d
+        self.rows = np.flatnonzero(rows)
+        self.augment = augment
+        self.rng = np.random.default_rng(SEED)
+        self.on_epoch_end()
+
+    def __len__(self):
+        return -(-len(self.rows) // BATCH_SIZE)
+
+    def on_epoch_end(self):
+        if self.augment:
+            self.rng.shuffle(self.rows)
+
+    def __getitem__(self, i):
+        rows = np.sort(self.rows[i * BATCH_SIZE : (i + 1) * BATCH_SIZE])
+        x = self.x[rows].astype(np.float32)
+        if self.augment:
+            shift = self.rng.uniform(
+                -MAX_LOUDNESS_SHIFT, MAX_LOUDNESS_SHIFT, (len(rows), 1, 1, 1)
+            )
+            x += shift.astype(np.float32)
+            for j, frames in enumerate(self.rng.integers(0, N_FRAMES, len(rows))):
+                x[j] = np.roll(x[j], frames, axis=0)
+        return x, targets(self.d, rows)
+
+
 def track_accuracy(track_id, genre, prob):
     ids, inverse = np.unique(track_id, return_inverse=True)
     total = np.zeros((len(ids), prob.shape[1]))
@@ -112,9 +145,9 @@ def evaluate(model, x, d, rows):
 
 if __name__ == "__main__":
     size = sys.argv[1]
-    keras.utils.set_random_seed(0)
+    keras.utils.set_random_seed(SEED)
     mel = np.load(ROOT / "out" / "mel.npz")
-    d = np.load(ROOT / "out" / "teacher.npz")
+    d = dict(np.load(ROOT / "out" / "teacher.npz"))
     assert np.array_equal(mel["tid"], d["tid"])
     x = mel["mel"][..., None]
     split = d["split"]
@@ -122,8 +155,11 @@ if __name__ == "__main__":
     x_train = x[train]
     mean = float(x_train.mean(dtype=np.float64))
     std = float(x_train.std(dtype=np.float64))
+    del x_train
     model = build(size, mean, std)
-    steps = EPOCHS * (len(x_train) // BATCH_SIZE)
+    epochs = SIZES[size]["epochs"]
+    train_batches = Batches(x, d, train, augment=True)
+    steps = epochs * len(train_batches)
     schedule = keras.optimizers.schedules.CosineDecay(
         LEARNING_RATE, steps, alpha=FINAL_LEARNING_RATE_FRACTION
     )
@@ -136,11 +172,9 @@ if __name__ == "__main__":
         },
     )
     model.fit(
-        x_train,
-        targets(d, train),
-        validation_data=(x[val], targets(d, val)),
-        batch_size=BATCH_SIZE,
-        epochs=EPOCHS,
+        train_batches,
+        validation_data=Batches(x, d, val, augment=False),
+        epochs=epochs,
         callbacks=[
             keras.callbacks.EarlyStopping(
                 patience=EARLY_STOP_PATIENCE, restore_best_weights=True
