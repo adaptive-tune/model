@@ -4,7 +4,6 @@ set -e
 base_url="https://essentia.upf.edu/models"
 
 wget -nc "${base_url}/feature-extractors/discogs-effnet/discogs-effnet-bs64-1.pb"
-wget -nc "${base_url}/tempo/tempocnn/deeptemp-k16-3.pb"
 for mood in aggressive happy party relaxed sad; do
     wget -nc "${base_url}/classification-heads/mood_${mood}/mood_${mood}-discogs-effnet-1.pb"
     wget -nc "${base_url}/classification-heads/mood_${mood}/mood_${mood}-discogs-effnet-1.json"
@@ -12,7 +11,6 @@ done
 
 sha1sum --check <<EOF
 16fe9f9915041e2ef209be30893a9b4a00a8ad69  discogs-effnet-bs64-1.pb
-8a52418fbf8220bffc8e88d7ad602c86a375a6fe  deeptemp-k16-3.pb
 c349f9f3fc1200469c7cba24026aa8422f5a3130  mood_aggressive-discogs-effnet-1.json
 e48ee4b58dde269d1136a59962f731d153c917da  mood_aggressive-discogs-effnet-1.pb
 838871d772d9ef32f720c2dafd6fe532ea8095ce  mood_happy-discogs-effnet-1.json

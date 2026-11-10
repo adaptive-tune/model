@@ -1,11 +1,6 @@
 import essentia
 import numpy as np
-from essentia.standard import (
-    MonoLoader,
-    TempoCNN,
-    TensorflowPredict2D,
-    TensorflowPredictEffnetDiscogs,
-)
+from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
 from scipy.optimize import minimize_scalar
 from scipy.special import softmax
 from sklearn.base import clone
@@ -14,27 +9,23 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from audio import load
-from common import (
-    MOODS,
-    POSITIVE,
-    ROOT,
-    SAMPLE_RATE,
-    SEGMENT_SAMPLES,
-    find_track,
-    tracks,
-)
+from audio import cut, load
+from common import MOODS, POSITIVE, ROOT, find_track, tracks
 
 essentia.log.warningActive = False
 
 
 TEACHER = ROOT / "out" / "teacher"
 MODELS = ROOT / "models"
+EFFNET_FRAME_HOP = 256
+EFFNET_PATCH_HOP = 62
+PATCHES_PER_SEGMENT = 2
+PATCHES_PER_SLOT = 4
+SLOT_SAMPLES = PATCHES_PER_SLOT * EFFNET_PATCH_HOP * EFFNET_FRAME_HOP
 
 effnet = TensorflowPredictEffnetDiscogs(
     graphFilename=str(MODELS / "discogs-effnet-bs64-1.pb"), output="PartitionedCall:1"
 )
-tempo = TempoCNN(graphFilename=str(MODELS / "deeptemp-k16-3.pb"))
 moods = {
     m: TensorflowPredict2D(
         graphFilename=str(MODELS / f"mood_{m}-discogs-effnet-1.pb"),
@@ -44,25 +35,22 @@ moods = {
 }
 
 
-def per_piece(values, n):
-    centre = np.arange(len(values)) * 0.992 + 1.024
-    piece = (centre * SAMPLE_RATE // SEGMENT_SAMPLES).astype(int)
-    return np.stack([values[piece == k].mean(axis=0) for k in range(n)])
+def spaced(pieces):
+    audio = np.zeros(len(pieces) * SLOT_SAMPLES, dtype=np.float32)
+    for k, piece in enumerate(pieces):
+        audio[k * SLOT_SAMPLES : k * SLOT_SAMPLES + len(piece)] = piece
+    return audio
 
 
 def process(track_id):
-    path = find_track(track_id)
-    audio = load(path)
-    n = len(audio) // SEGMENT_SAMPLES
-    emb = effnet(audio)
+    pieces = cut(load(find_track(track_id)))
+    n = len(pieces)
+    patches = np.arange(n)[:, None] * PATCHES_PER_SLOT + np.arange(PATCHES_PER_SEGMENT)
+    emb = effnet(spaced(pieces))[patches.reshape(-1)]
     mood = np.stack([moods[m](emb)[:, POSITIVE[m]] for m in MOODS], axis=1)
-    bpm = tempo(MonoLoader(filename=str(path), sampleRate=11025, resampleQuality=4)())[
-        0
-    ]
     return {
-        "emb": per_piece(emb, n).astype(np.float16),
-        "mood": per_piece(mood, n).astype(np.float32),
-        "bpm": np.full(n, bpm, dtype=np.float32),
+        "emb": emb.reshape(n, PATCHES_PER_SEGMENT, -1).mean(axis=1).astype(np.float16),
+        "mood": mood.reshape(n, PATCHES_PER_SEGMENT, -1).mean(axis=1).astype(np.float32),
     }
 
 
@@ -98,7 +86,7 @@ def genre_prob(emb, genre, split, artist):
 def generate_npz():
     TEACHER.mkdir(parents=True, exist_ok=True)
     t = tracks()
-    embs, mood_list, bpms, track_ids, pieces = [], [], [], [], []
+    embs, mood_list, track_ids, pieces = [], [], [], []
     for track_id in t.index:
         path = TEACHER / f"{track_id}.npz"
         if not path.exists():
@@ -110,7 +98,6 @@ def generate_npz():
         d = np.load(path)
         embs.append(d["emb"])
         mood_list.append(d["mood"])
-        bpms.append(d["bpm"])
         track_ids.append(np.full(len(d["emb"]), track_id))
         pieces.append(np.arange(len(d["emb"])))
     track_id = np.concatenate(track_ids)
@@ -126,7 +113,6 @@ def generate_npz():
         genre=genre,
         genre_prob=genre_prob(emb, genre, split, artist),
         mood=np.concatenate(mood_list),
-        bpm=np.concatenate(bpms),
     )
 
 

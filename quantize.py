@@ -8,27 +8,23 @@ from tensorflow.lite.python import schema_py_generated as schema
 from tflite_micro import runtime
 
 from common import GENRES, MOODS, N_FRAMES, N_MELS, ROOT
-from student import BPM_CENTER, BPM_SCALE, track_accuracy
+from student import track_accuracy
 
 REPRESENTATIVE_SAMPLES = 500
 TFLM_CHECK_SAMPLES = 200
 MAX_ARENA_BYTES = 8 << 20
 ARENA_PRECISION_BYTES = 64
-OUTPUT_SIZES = [len(GENRES), len(MOODS), 1]
+OUTPUT_SIZES = [len(GENRES), len(MOODS)]
 INT8_MIN, INT8_MAX = -128, 127
 
 
 def with_activations(model):
     inputs = keras.Input((N_FRAMES, N_MELS, 1), batch_size=1)
-    genre, mood, bpm = model(inputs)
-    return keras.Model(
-        inputs,
-        [
-            layers.Softmax()(genre),
-            layers.Activation("sigmoid")(mood),
-            layers.Rescaling(BPM_SCALE, BPM_CENTER)(bpm),
-        ],
-    )
+    outputs = model(inputs)
+    activated = [layers.Softmax()(outputs["genre"])]
+    if "mood" in outputs:
+        activated.append(layers.Activation("sigmoid")(outputs["mood"]))
+    return keras.Model(inputs, activated)
 
 
 def convert(model, samples):
@@ -49,6 +45,10 @@ def convert(model, samples):
         outputs, key=lambda i: OUTPUT_SIZES.index(graph.Tensors(i).ShapeAsNumpy()[1])
     )
     return bytes(blob)
+
+
+def output_count(blob):
+    return schema.Model.GetRootAsModel(blob, 0).Subgraphs(0).OutputsLength()
 
 
 def quantize(x, details):
@@ -80,7 +80,7 @@ def run_tflite(blob, x):
 
 def run_tflm(blob, x, arena=MAX_ARENA_BYTES):
     interpreter = runtime.Interpreter.from_bytes(blob, arena_size=arena)
-    results = [[] for _ in OUTPUT_SIZES]
+    results = [[] for _ in range(output_count(blob))]
     for sample in x:
         interpreter.set_input(sample[None], 0)
         interpreter.invoke()
@@ -109,7 +109,7 @@ def arena_size(blob, x):
 
 
 if __name__ == "__main__":
-    size = sys.argv[1]
+    name = sys.argv[1]
     mel = np.load(ROOT / "out" / "mel.npz")
     d = np.load(ROOT / "out" / "teacher.npz")
     x = mel["mel"][..., None]
@@ -117,22 +117,22 @@ if __name__ == "__main__":
     test = d["split"] == "test"
     rng = np.random.default_rng(0)
     samples = x[np.sort(rng.choice(train, REPRESENTATIVE_SAMPLES, replace=False))]
-    model = keras.models.load_model(ROOT / "out" / f"student_{size}.keras", compile=False)
+    model = keras.models.load_model(ROOT / "out" / f"student_{name}.keras", compile=False)
     blob = convert(with_activations(model), samples)
-    (ROOT / "out" / f"student_{size}.tflite").write_bytes(blob)
+    (ROOT / "out" / f"student_{name}.tflite").write_bytes(blob)
 
     x_test = x[test].astype(np.float32)
     outputs, input_details, output_details = run_tflite(blob, x_test)
-    genre, mood, bpm = (dequantize(o, od) for o, od in zip(outputs, output_details))
+    genre, *mood = (dequantize(o, od) for o, od in zip(outputs, output_details))
     print("tflite bytes", len(blob))
     print("input scale, zero point", input_details["quantization"])
     print("segment accuracy", (genre.argmax(axis=1) == d["genre"][test]).mean())
     print("track accuracy", track_accuracy(d["tid"][test], d["genre"][test], genre))
-    print("mood mae", np.abs(mood - d["mood"][test]).mean())
-    print("bpm mae", np.abs(bpm[:, 0] - d["bpm"][test]).mean())
+    if mood:
+        print("mood mae", np.abs(mood[0] - d["mood"][test]).mean())
 
     x_check = quantize(x_test[:TFLM_CHECK_SAMPLES], input_details)
     tflm = run_tflm(blob, x_check)
     diff = [np.abs(a.astype(int) - b[:TFLM_CHECK_SAMPLES].astype(int)).max() for a, b in zip(tflm, outputs)]
-    print("tflm vs tflite max int8 diff (genre, mood, bpm)", diff)
+    print("tflm vs tflite max int8 diff", diff)
     print("tflm arena bytes", arena_size(blob, x_check[:1]))

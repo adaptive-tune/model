@@ -22,9 +22,6 @@ MAX_LOUDNESS_SHIFT = 1.0
 SEED = 0
 
 KERNEL_SIZE = 3
-BPM_HIDDEN_UNITS = 32
-BPM_CENTER = 120
-BPM_SCALE = 40
 
 SIZES = {
     "small": {
@@ -62,7 +59,7 @@ def separable(x, filters, stride):
     return conv(x, filters, 1, 1)
 
 
-def build(size, mean, std):
+def build(size, mean, std, heads):
     inputs = keras.Input((N_FRAMES, N_MELS, 1))
     x = layers.Rescaling(1 / std, -mean / std)(inputs)
     filters, stride = SIZES[size]["stem"]
@@ -70,11 +67,10 @@ def build(size, mean, std):
     for filters, stride in SIZES[size]["blocks"]:
         x = separable(x, filters, stride)
     x = layers.Dropout(DROPOUT)(layers.GlobalAveragePooling2D()(x))
-    genre = layers.Dense(len(GENRES), name="genre")(x)
-    mood = layers.Dense(len(MOODS), name="mood")(x)
-    bpm = layers.Dense(BPM_HIDDEN_UNITS, activation="relu")(x)
-    bpm = layers.Dense(1, name="bpm")(bpm)
-    return keras.Model(inputs, [genre, mood, bpm])
+    outputs = {"genre": layers.Dense(len(GENRES), name="genre")(x)}
+    if "mood" in heads:
+        outputs["mood"] = layers.Dense(len(MOODS), name="mood")(x)
+    return keras.Model(inputs, outputs)
 
 
 def genre_loss(y, logits):
@@ -86,20 +82,26 @@ def genre_loss(y, logits):
     return TEACHER_WEIGHT * TEMPERATURE**2 * kl + (1 - TEACHER_WEIGHT) * ce
 
 
-def targets(d, rows):
+LOSSES = {
+    "genre": genre_loss,
+    "mood": keras.losses.BinaryCrossentropy(from_logits=True),
+}
+
+
+def targets(d, rows, heads):
     onehot = np.eye(len(GENRES), dtype=np.float32)[d["genre"][rows]]
-    return {
-        "genre": np.concatenate([d["genre_prob"][rows], onehot], axis=1),
-        "mood": d["mood"][rows],
-        "bpm": ((d["bpm"][rows] - BPM_CENTER) / BPM_SCALE)[:, None],
-    }
+    y = {"genre": np.concatenate([d["genre_prob"][rows], onehot], axis=1)}
+    if "mood" in heads:
+        y["mood"] = d["mood"][rows]
+    return y
 
 
 class Batches(keras.utils.PyDataset):
-    def __init__(self, x, d, rows, augment):
+    def __init__(self, x, d, rows, heads, augment):
         super().__init__()
         self.x = x
         self.d = d
+        self.heads = heads
         self.rows = np.flatnonzero(rows)
         self.augment = augment
         self.rng = np.random.default_rng(SEED)
@@ -122,7 +124,7 @@ class Batches(keras.utils.PyDataset):
             x += shift.astype(np.float32)
             for j, frames in enumerate(self.rng.integers(0, N_FRAMES, len(rows))):
                 x[j] = np.roll(x[j], frames, axis=0)
-        return x, targets(self.d, rows)
+        return x, targets(self.d, rows, self.heads)
 
 
 def track_accuracy(track_id, genre, prob):
@@ -135,16 +137,18 @@ def track_accuracy(track_id, genre, prob):
 
 
 def evaluate(model, x, d, rows):
-    genre, mood, bpm = model.predict(x[rows], batch_size=PREDICT_BATCH_SIZE, verbose=0)
-    prob = softmax(genre, axis=1)
+    outputs = model.predict(x[rows], batch_size=PREDICT_BATCH_SIZE, verbose=0)
+    prob = softmax(outputs["genre"], axis=1)
     print("segment accuracy", (prob.argmax(axis=1) == d["genre"][rows]).mean())
     print("track accuracy", track_accuracy(d["tid"][rows], d["genre"][rows], prob))
-    print("mood mae", np.abs(expit(mood) - d["mood"][rows]).mean())
-    print("bpm mae", np.abs(bpm[:, 0] * BPM_SCALE + BPM_CENTER - d["bpm"][rows]).mean())
+    if "mood" in outputs:
+        print("mood mae", np.abs(expit(outputs["mood"]) - d["mood"][rows]).mean())
 
 
 if __name__ == "__main__":
     size = sys.argv[1]
+    heads = ["genre"] if "--no-mood" in sys.argv else ["genre", "mood"]
+    name = size if "mood" in heads else f"{size}_nomood"
     keras.utils.set_random_seed(SEED)
     mel = np.load(ROOT / "out" / "mel.npz")
     d = dict(np.load(ROOT / "out" / "teacher.npz"))
@@ -156,24 +160,20 @@ if __name__ == "__main__":
     mean = float(x_train.mean(dtype=np.float64))
     std = float(x_train.std(dtype=np.float64))
     del x_train
-    model = build(size, mean, std)
+    model = build(size, mean, std, heads)
     epochs = SIZES[size]["epochs"]
-    train_batches = Batches(x, d, train, augment=True)
+    train_batches = Batches(x, d, train, heads, augment=True)
     steps = epochs * len(train_batches)
     schedule = keras.optimizers.schedules.CosineDecay(
         LEARNING_RATE, steps, alpha=FINAL_LEARNING_RATE_FRACTION
     )
     model.compile(
         optimizer=keras.optimizers.Adam(schedule),
-        loss={
-            "genre": genre_loss,
-            "mood": keras.losses.BinaryCrossentropy(from_logits=True),
-            "bpm": keras.losses.Huber(),
-        },
+        loss={head: LOSSES[head] for head in heads},
     )
     model.fit(
         train_batches,
-        validation_data=Batches(x, d, val, augment=False),
+        validation_data=Batches(x, d, val, heads, augment=False),
         epochs=epochs,
         callbacks=[
             keras.callbacks.EarlyStopping(
@@ -182,5 +182,5 @@ if __name__ == "__main__":
         ],
         verbose=2,
     )
-    model.save(ROOT / "out" / f"student_{size}.keras")
+    model.save(ROOT / "out" / f"student_{name}.keras")
     evaluate(model, x, d, test)
