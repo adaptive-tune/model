@@ -5,10 +5,12 @@ import numpy as np
 import tensorflow as tf
 from keras import layers
 from tensorflow.lite.python import schema_py_generated as schema
+from scipy.special import softmax
 from tflite_micro import runtime
 
 from common import GENRES, MOODS, N_FRAMES, N_MELS, ROOT
-from student import track_accuracy
+from classifier import ece, fit_temperature
+from student import PREDICT_BATCH_SIZE, track_accuracy
 
 REPRESENTATIVE_SAMPLES = 500
 TFLM_CHECK_SAMPLES = 200
@@ -18,10 +20,10 @@ OUTPUT_SIZES = [len(GENRES), len(MOODS)]
 INT8_MIN, INT8_MAX = -128, 127
 
 
-def with_activations(model):
+def with_activations(model, temperature):
     inputs = keras.Input((N_FRAMES, N_MELS, 1), batch_size=1)
     outputs = model(inputs)
-    activated = [layers.Softmax()(outputs["genre"])]
+    activated = [layers.Softmax()(layers.Rescaling(1 / temperature)(outputs["genre"]))]
     if "mood" in outputs:
         activated.append(layers.Activation("sigmoid")(outputs["mood"]))
     return keras.Model(inputs, activated)
@@ -45,6 +47,19 @@ def convert(model, samples):
         outputs, key=lambda i: OUTPUT_SIZES.index(graph.Tensors(i).ShapeAsNumpy()[1])
     )
     return bytes(blob)
+
+
+def macs(model):
+    total = 0
+    for layer in model.layers:
+        out = layer.output.shape
+        if isinstance(layer, layers.DepthwiseConv2D):
+            total += out[1] * out[2] * out[3] * np.prod(layer.kernel_size)
+        elif isinstance(layer, layers.Conv2D):
+            total += out[1] * out[2] * out[3] * np.prod(layer.kernel_size) * layer.input.shape[3]
+        elif isinstance(layer, layers.Dense):
+            total += layer.input.shape[1] * out[1]
+    return int(total)
 
 
 def output_count(blob):
@@ -114,16 +129,39 @@ if __name__ == "__main__":
     d = np.load(ROOT / "out" / "teacher.npz")
     x = mel["mel"][..., None]
     train = np.flatnonzero(d["split"] == "training")
+    val = d["split"] == "validation"
     test = d["split"] == "test"
+    rows = val | test
     rng = np.random.default_rng(0)
     samples = x[np.sort(rng.choice(train, REPRESENTATIVE_SAMPLES, replace=False))]
     model = keras.models.load_model(ROOT / "out" / f"student_{name}.keras", compile=False)
-    blob = convert(with_activations(model), samples)
+    logits = model.predict(x[val], batch_size=PREDICT_BATCH_SIZE, verbose=0)["genre"]
+    temperature = fit_temperature(logits, d["genre"][val])
+    blob = convert(with_activations(model, temperature), samples)
     (ROOT / "out" / f"student_{name}.tflite").write_bytes(blob)
 
-    x_test = x[test].astype(np.float32)
-    outputs, input_details, output_details = run_tflite(blob, x_test)
+    outputs, input_details, output_details = run_tflite(blob, x[rows].astype(np.float32))
     genre, *mood = (dequantize(o, od) for o, od in zip(outputs, output_details))
+    np.savez(
+        ROOT / "out" / f"edge_{name}.npz",
+        tid=d["tid"][rows],
+        k=d["k"][rows],
+        split=d["split"][rows],
+        genre=d["genre"][rows],
+        genre_prob=genre,
+        **({"mood": mood[0]} if mood else {}),
+    )
+    is_test = test[rows]
+    outputs = [o[is_test] for o in outputs]
+    genre = genre[is_test]
+    mood = [m[is_test] for m in mood]
+    calibrated = softmax(logits / temperature, axis=1)
+    print("temperature", temperature)
+    print("val ece before", ece(softmax(logits, axis=1), d["genre"][val]))
+    print("val ece after", ece(calibrated, d["genre"][val]))
+    print("test ece int8", ece(genre, d["genre"][test]))
+    print("val mean confidence", calibrated.max(axis=1).mean())
+    print("macs", macs(model))
     print("tflite bytes", len(blob))
     print("input scale, zero point", input_details["quantization"])
     print("segment accuracy", (genre.argmax(axis=1) == d["genre"][test]).mean())
@@ -131,7 +169,7 @@ if __name__ == "__main__":
     if mood:
         print("mood mae", np.abs(mood[0] - d["mood"][test]).mean())
 
-    x_check = quantize(x_test[:TFLM_CHECK_SAMPLES], input_details)
+    x_check = quantize(x[test][:TFLM_CHECK_SAMPLES].astype(np.float32), input_details)
     tflm = run_tflm(blob, x_check)
     diff = [np.abs(a.astype(int) - b[:TFLM_CHECK_SAMPLES].astype(int)).max() for a, b in zip(tflm, outputs)]
     print("tflm vs tflite max int8 diff", diff)
