@@ -1,15 +1,9 @@
 import essentia
 import numpy as np
 from essentia.standard import TensorflowPredict2D, TensorflowPredictEffnetDiscogs
-from scipy.optimize import minimize_scalar
-from scipy.special import softmax
-from sklearn.base import clone
-from sklearn.model_selection import GroupKFold
-from sklearn.neural_network import MLPClassifier
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from audio import cut, load
+from classifier import genre_prob
 from common import MOODS, POSITIVE, ROOT, find_track, tracks
 
 essentia.log.warningActive = False
@@ -52,35 +46,6 @@ def process(track_id):
         "emb": emb.reshape(n, PATCHES_PER_SEGMENT, -1).mean(axis=1).astype(np.float16),
         "mood": mood.reshape(n, PATCHES_PER_SEGMENT, -1).mean(axis=1).astype(np.float32),
     }
-
-
-def scale(p, T):
-    return softmax(np.log(np.clip(p, 1e-12, 1)) / T, axis=1).astype(np.float32)
-
-
-def nll(p, y):
-    return -np.log(np.clip(p[np.arange(len(y)), y], 1e-12, 1)).mean()
-
-
-def genre_prob(emb, genre, split, artist):
-    clf = make_pipeline(
-        StandardScaler(),
-        MLPClassifier((256,), alpha=1e-2, early_stopping=True, random_state=0),
-    )
-    train, val = split == "training", split == "validation"
-    clf.fit(emb[train], genre[train])
-    raw = clf.predict_proba(emb)
-    T = minimize_scalar(
-        lambda t: nll(scale(raw[val], t), genre[val]), bounds=(0.5, 20), method="bounded"
-    ).x
-    p = scale(raw, T)
-    idx = np.flatnonzero(train)
-    for a, b in GroupKFold(5).split(idx, groups=artist[idx]):
-        fold = clone(clf).fit(emb[idx[a]], genre[idx[a]])
-        p[idx[b]] = scale(fold.predict_proba(emb[idx[b]]), T)
-    test = split == "test"
-    print("T", T, "test acc", (p[test].argmax(1) == genre[test]).mean())
-    return p
 
 
 def generate_npz():
